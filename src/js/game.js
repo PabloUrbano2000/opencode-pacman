@@ -70,6 +70,8 @@ function createGame() {
       dir: 'left',
       nextDir: null,
       speed: PACMAN_SPEED,
+      moving: false, // true solo en los frames en que Pac-Man avanza
+      mouthTick: 0,  // frames acumulados de movimiento; el render deriva el sprite
     },
     ghosts: GHOST_STARTS.map( ( g ) => ( {
       x: g.x,
@@ -131,6 +133,7 @@ function movePacman( game ) {
   const p = game.pacman;
   const grid = game.grid;
   const width = grid[ 0 ].length;
+  p.moving = false;
 
   if ( aligned( p.x ) && aligned( p.y ) ) {
     p.x = Math.round( p.x );
@@ -163,6 +166,8 @@ function movePacman( game ) {
   p.x += d.x * p.speed;
   p.y += d.y * p.speed;
   wrapTunnel( p, width );
+  p.moving = true;
+  p.mouthTick++;
 }
 
 // Objetivo de persecucion en fase chase segun el kind (personalidades clasicas).
@@ -316,6 +321,8 @@ function resetPositions( game ) {
   p.y = PACMAN_START.y;
   p.dir = 'left';
   p.nextDir = null;
+  p.moving = false;
+  p.mouthTick = 0;
   game.ghosts.forEach( ( ghost, i ) => {
     ghost.x = GHOST_STARTS[ i ].x;
     ghost.y = GHOST_STARTS[ i ].y;

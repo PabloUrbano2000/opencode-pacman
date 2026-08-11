@@ -94,6 +94,11 @@ function drawPowerPellets( ctx, grid, frame ) {
   }
 }
 
+// Sprites discretos de la boca: angulo (fraccion de PI) de cada estado.
+// Solo avanza mientras Pac-Man se mueve; en reposo queda cerrada.
+const MOUTH_CYCLE_FRAMES = 4;                    // avanza un sprite cada 4 frames de movimiento
+const MOUTH_FRAMES = [ 0.02, 0.11, 0.20, 0.30 ]; // cerrada, 1/4, media, abierta
+
 function drawPacman( ctx, p, frame ) {
   const { cx, cy } = cellCenter( p.x, p.y );
   let rot = 0;
@@ -102,8 +107,10 @@ function drawPacman( ctx, p, frame ) {
   else if ( p.dir === 'left' ) rot = Math.PI;
   else if ( p.dir === 'up' ) rot = -Math.PI / 2;
 
-  // Boca animada: abre/cierra con el frame.
-  const open = ( Math.sin( frame * 0.3 ) * 0.5 + 0.5 ) * 0.28 + 0.02;
+  // Boca por sprites: en movimiento alterna 4 estados discretos; parado, cerrada.
+  const open = p.moving
+    ? MOUTH_FRAMES[ Math.floor( p.mouthTick / MOUTH_CYCLE_FRAMES ) % MOUTH_FRAMES.length ]
+    : MOUTH_FRAMES[ 0 ];
 
   ctx.fillStyle = '#ffff00';
   ctx.beginPath();
