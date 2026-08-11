@@ -144,7 +144,12 @@ function drawHUD( ctx, game, W ) {
   ctx.fillText( 'VIDAS ' + game.lives, W * TILE - 8, 4 );
 }
 
-const GHOST_COLORS = [ '#ff0000', '#00ffff', '#ffb8ff', '#ffb852' ];
+const GHOST_COLORS = {
+  blinky: '#ff0000',
+  pinky:  '#ffb8ff',
+  inky:   '#00ffff',
+  clyde:  '#ffb852',
+};
 
 function draw( ctx, game, frame ) {
   const grid = game.grid;
@@ -158,7 +163,9 @@ function draw( ctx, game, frame ) {
   drawDoor( ctx, grid );
   drawDots( ctx, grid );
   drawPacman( ctx, game.pacman, frame );
-  game.ghosts.forEach( ( g, i ) => drawGhost( ctx, g, GHOST_COLORS[ i ] || '#ff0000' ) );
+  game.ghosts.forEach( ( ghost ) =>
+    drawGhost( ctx, ghost, GHOST_COLORS[ ghost.kind ] || '#ff0000' )
+  );
   drawHUD( ctx, game, W );
 }
 
