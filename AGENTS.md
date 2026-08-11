@@ -2,6 +2,8 @@
 
 Vanilla JS/HTML/CSS Pac-Man clone. No build step, no package.json, no tests, no linter. The project's purpose is learning spec-driven development. Codebase and comments are in Spanish.
 
+Test
+
 ## Run
 
 Open `src/index.html` in a browser. No server, bundler, or install needed (plain `<script>` tags, no ES modules, no fetch).
