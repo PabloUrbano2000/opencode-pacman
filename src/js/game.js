@@ -13,6 +13,14 @@ const OPPOSITE = { left: 'right', right: 'left', up: 'down', down: 'up' };
 const PACMAN_SPEED = 0.125; // 1/8 celda/frame -> alinea cada 8 frames
 const GHOST_SPEED = 0.1;    // 1/10 celda/frame
 
+// Power pellets y modo frightened.
+const PELLET_POINTS = 50;
+const FRIGHTENED_FRAMES = 360;  // 6s a 60fps
+const FLASH_FRAMES = 60;        // 1s de parpadeo antes de volver a normal
+const FRIGHTENED_SPEED = 0.0625; // 50% de PACMAN_SPEED
+const EYE_SPEED = 0.2;          // 2x GHOST_SPEED (ojos rapidos, como el arcade)
+const GHOST_EAT_VALUES = [ 200, 400, 800, 1600 ];
+
 // Liberacion escalonada del pen en frames (a 60fps).
 const RELEASE_FRAMES = { blinky: 0, pinky: 48, inky: 240, clyde: 420 };
 // Tabla clasica de fases scatter/chase del arcade (acaba en chase infinito).
@@ -42,7 +50,7 @@ function createGame() {
   grid[ PACMAN_START.y ][ PACMAN_START.x ] = 0;
 
   let dots = 0;
-  for ( const row of grid ) for ( const v of row ) if ( v === 2 ) dots++;
+  for ( const row of grid ) for ( const v of row ) if ( v === 2 || v === 4 ) dots++;
 
   return {
     state: 'start',
@@ -54,6 +62,8 @@ function createGame() {
     phase: 'scatter',
     phaseIndex: 0,
     phaseTimer: PHASE_TABLE[ 0 ].frames,
+    frightened: 0, // frames restantes de modo frightened; 0 = inactivo
+    ghostCombo: 0, // puntos del proximo fantasma comido (se inicia a 200 con una pellet)
     pacman: {
       x: PACMAN_START.x,
       y: PACMAN_START.y,
@@ -75,6 +85,16 @@ function createGame() {
 
 function aligned( v ) {
   return Math.abs( v - Math.round( v ) ) < 1e-3;
+}
+
+// Si el paso cruza una linea del grid (entero), encaja la coordenada ahi.
+// Asi un cambio de velocidad a mitad de celda no rompe la alineacion.
+function settleAxis( v, step ) {
+  const prev = v;
+  v += step;
+  const r = Math.round( v );
+  if ( r > Math.min( prev, v ) && r < Math.max( prev, v ) ) v = r;
+  return v;
 }
 
 // Una celda es muro para el actor dado?
@@ -121,11 +141,19 @@ function movePacman( game ) {
       p.dir = p.nextDir;
       p.nextDir = null;
     }
-    // Comer dot.
-    if ( grid[ p.y ][ p.x ] === 2 ) {
+    // Comer dot o power pellet.
+    const cell = grid[ p.y ][ p.x ];
+    if ( cell === 2 ) {
       grid[ p.y ][ p.x ] = 0;
       game.score += 10;
       game.dotsRemaining--;
+    } else if ( cell === 4 ) {
+      grid[ p.y ][ p.x ] = 0;
+      game.score += PELLET_POINTS;
+      game.dotsRemaining--;
+      // Activa el modo frightened: reinicia el temporizador y el combo.
+      game.frightened = FRIGHTENED_FRAMES;
+      game.ghostCombo = 200;
     }
     // Si no puede seguir, se detiene en la celda.
     if ( !canMove( grid, p.x, p.y, p.dir, 'pacman' ) ) return;
@@ -185,6 +213,12 @@ function decideGhost( game, ghost ) {
   const target =
     game.phase === 'scatter' ? GHOST_SCATTER_TARGETS[ ghost.kind ] : chaseTarget( game, ghost );
 
+  // Modo frightened: direccion aleatoria valida (nunca reversa).
+  if ( game.frightened > 0 ) {
+    ghost.dir = choices[ Math.floor( Math.random() * choices.length ) ];
+    return;
+  }
+
   let best = choices[ 0 ];
   let bestDistance = Infinity;
   for ( const dir of choices ) {
@@ -212,8 +246,9 @@ function moveGhost( game, g ) {
   }
 
   const d = DIRS[ g.dir ];
-  g.x += d.x * g.speed;
-  g.y += d.y * g.speed;
+  const speed = game.frightened > 0 ? FRIGHTENED_SPEED : g.speed;
+  g.x = settleAxis( g.x, d.x * speed );
+  g.y = settleAxis( g.y, d.y * speed );
   wrapTunnel( g, width );
 }
 
@@ -223,9 +258,56 @@ function moveGhost( game, g ) {
 function bounceGhost( game, ghost ) {
   if ( ghost.dir === 'up' && ghost.y <= 13 ) ghost.dir = 'down';
   else if ( ghost.dir === 'down' && ghost.y >= 15 ) ghost.dir = 'up';
-  ghost.y += DIRS[ ghost.dir ].y * ghost.speed;
+  ghost.y = settleAxis( ghost.y, DIRS[ ghost.dir ].y * ghost.speed );
   // El clamp absorbe la deriva de coma flotante y garantiza el rango 13-15.
   ghost.y = Math.max( 13, Math.min( 15, ghost.y ) );
+}
+
+// Ojos: persiguen la puerta del pen (13,14) a EYE_SPEED. Al entrar en el pen
+// (filas 13-15, cols 13-14) se regeneran al color normal y quedan en espera.
+function decideEyesDirection( game, ghost ) {
+  const grid = game.grid;
+  const options = Object.keys( DIRS ).filter(
+    ( dir ) => dir !== OPPOSITE[ ghost.dir ] && canMove( grid, ghost.x, ghost.y, dir, 'ghost' )
+  );
+  const choices = options.length ? options : [ '' + OPPOSITE[ ghost.dir ] ];
+  const target = { x: 13, y: 14 };
+  let best = choices[ 0 ];
+  let bestDistance = Infinity;
+  for ( const dir of choices ) {
+    const delta = DIRS[ dir ];
+    const nextX = ghost.x + delta.x;
+    const nextY = ghost.y + delta.y;
+    const distance = Math.abs( nextX - target.x ) + Math.abs( nextY - target.y );
+    if ( distance < bestDistance ) {
+      bestDistance = distance;
+      best = dir;
+    }
+  }
+  ghost.dir = best;
+}
+
+function moveEyes( game, ghost ) {
+  const grid = game.grid;
+  const width = grid[ 0 ].length;
+
+  if ( aligned( ghost.x ) && aligned( ghost.y ) ) {
+    ghost.x = Math.round( ghost.x );
+    ghost.y = Math.round( ghost.y );
+    if ( ghost.y >= 13 && ghost.y <= 15 && ghost.x >= 13 && ghost.x <= 14 ) {
+      ghost.mode = 'waiting';
+      ghost.releaseAt = game.frame + RELEASE_FRAMES[ ghost.kind ];
+      ghost.dir = 'up';
+      return;
+    }
+    decideEyesDirection( game, ghost );
+    if ( !canMove( grid, ghost.x, ghost.y, ghost.dir, 'ghost' ) ) return;
+  }
+
+  const d = DIRS[ ghost.dir ];
+  ghost.x = settleAxis( ghost.x, d.x * EYE_SPEED );
+  ghost.y = settleAxis( ghost.y, d.y * EYE_SPEED );
+  wrapTunnel( ghost, width );
 }
 
 function resetPositions( game ) {
@@ -240,11 +322,13 @@ function resetPositions( game ) {
     ghost.dir = 'up';
     ghost.mode = 'waiting';
   } );
-  // Reinicia el reloj global, las fases y las liberaciones del pen.
+  // Reinicia el reloj global, las fases, el modo frightened y el combo.
   game.frame = 0;
   game.phase = 'scatter';
   game.phaseIndex = 0;
   game.phaseTimer = PHASE_TABLE[ 0 ].frames;
+  game.frightened = 0;
+  game.ghostCombo = 0;
 }
 
 function collides( a, b ) {
@@ -254,31 +338,54 @@ function collides( a, b ) {
 function update( game ) {
   movePacman( game );
 
-  // Reloj global de la partida y avance de la tabla de fases scatter/chase.
+  // Reloj global de la partida, avance del modo frightened y de las fases
+  // scatter/chase. El reloj de fases queda pausado mientras dura el poder.
   game.frame++;
-  game.phaseTimer--;
-  if ( game.phaseTimer <= 0 && game.phaseIndex < PHASE_TABLE.length - 1 ) {
-    game.phaseIndex++;
-    game.phase = PHASE_TABLE[ game.phaseIndex ].phase;
-    game.phaseTimer = PHASE_TABLE[ game.phaseIndex ].frames;
+  if ( game.frightened > 0 ) {
+    game.frightened--;
+  } else {
+    game.phaseTimer--;
+    if ( game.phaseTimer <= 0 && game.phaseIndex < PHASE_TABLE.length - 1 ) {
+      game.phaseIndex++;
+      game.phase = PHASE_TABLE[ game.phaseIndex ].phase;
+      game.phaseTimer = PHASE_TABLE[ game.phaseIndex ].frames;
+    }
   }
 
   game.ghosts.forEach( ( ghost ) => {
     if ( ghost.mode === 'waiting' && game.frame >= ghost.releaseAt ) ghost.mode = 'active';
-    if ( ghost.mode === 'active' ) moveGhost( game, ghost );
+    if ( ghost.mode === 'eyes' ) moveEyes( game, ghost );
+    else if ( ghost.mode === 'active' ) moveGhost( game, ghost );
     else bounceGhost( game, ghost );
   } );
 
   for ( const ghost of game.ghosts ) {
-    if ( collides( game.pacman, ghost ) ) {
-      game.lives--;
-      if ( game.lives <= 0 ) {
-        game.state = 'lost';
-        return;
-      }
-      resetPositions( game );
-      break;
+    if ( !collides( game.pacman, ghost ) ) continue;
+    // Comer un fantasma comible: suma el combo y avanza al siguiente valor.
+    if ( ghost.mode === 'active' && game.frightened > 0 ) {
+      const comboIndex = Math.min(
+        Math.max( 0, GHOST_EAT_VALUES.indexOf( game.ghostCombo ) ),
+        GHOST_EAT_VALUES.length - 1
+      );
+      game.score += GHOST_EAT_VALUES[ comboIndex ];
+      game.ghostCombo = GHOST_EAT_VALUES[ Math.min( comboIndex + 1, GHOST_EAT_VALUES.length - 1 ) ];
+      ghost.mode = 'eyes';
+      // El fantasma se come a mitad de celda; encajar el ojo al centro para
+      // que avance a EYE_SPEED sin saltarse la alineacion con el grid.
+      ghost.x = Math.round( ghost.x );
+      ghost.y = Math.round( ghost.y );
+      continue;
     }
+    // Los ojos no hacen dano.
+    if ( ghost.mode === 'eyes' ) continue;
+    // Choque con fantasma normal: perder una vida.
+    game.lives--;
+    if ( game.lives <= 0 ) {
+      game.state = 'lost';
+      return;
+    }
+    resetPositions( game );
+    break;
   }
 
   if ( game.dotsRemaining <= 0 ) game.state = 'won';
@@ -287,3 +394,4 @@ function update( game ) {
 window.createGame = createGame;
 window.update = update;
 window.DIRS = DIRS;
+window.FLASH_FRAMES = FLASH_FRAMES;
